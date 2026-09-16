@@ -7,7 +7,7 @@ on:
       - main
     paths:
       - '.github/workflows/build.yml'
-      - 'MundoTouch3_3.1_POLIMENTO_source_v4.zip'
+      - 'MundoTouch3_3.1_POLIMENTO_source_v5.zip'
 
 permissions:
   contents: write
@@ -21,12 +21,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Unpack MundoTouch 3.1 source v4
+      - name: Unpack MundoTouch 3.1 source v5
         shell: bash
         run: |
           set -euo pipefail
 
-          SOURCE_ZIP="MundoTouch3_3.1_POLIMENTO_source_v4.zip"
+          SOURCE_ZIP="MundoTouch3_3.1_POLIMENTO_source_v5.zip"
 
           echo "Checking source package: $SOURCE_ZIP"
           test -s "$SOURCE_ZIP"
@@ -36,15 +36,17 @@ jobs:
           echo "Testing ZIP integrity..."
           unzip -tq "$SOURCE_ZIP"
 
-          echo "Extracting MundoTouch 3.1 v4..."
+          echo "Extracting MundoTouch 3.1 v5..."
           unzip -q "$SOURCE_ZIP" -d .
+
+          echo "Validating extracted project structure..."
 
           test -f MundoTouch3/Makefile
           test -f MundoTouch3/source/main.cpp
           test -f MundoTouch3/scripts/gen_audio.py
           test -f MundoTouch3/scripts/prep_assets.py
 
-          echo "MundoTouch 3.1 v4 source package OK."
+          echo "MundoTouch 3.1 v5 source package OK."
 
       - name: Install audio and art tools
         shell: bash
@@ -52,6 +54,7 @@ jobs:
           set -euo pipefail
 
           sudo apt-get update -qq
+
           sudo apt-get install -y -qq \
             ffmpeg \
             python3-pil \
@@ -63,10 +66,27 @@ jobs:
             --break-system-packages \
             edge-tts
 
+          echo "FFmpeg:"
           ffmpeg -version | head -1
+
+          echo "Python:"
           python3 --version
 
           echo "Required tools installed."
+
+      - name: Validate Python scripts
+        shell: bash
+        working-directory: MundoTouch3
+        run: |
+          set -euo pipefail
+
+          echo "Checking Python scripts..."
+
+          python3 -m py_compile \
+            scripts/gen_audio.py \
+            scripts/prep_assets.py
+
+          echo "Python scripts passed syntax validation."
 
       - name: Prepare MundoTouch 3.1 art assets
         shell: bash
@@ -74,44 +94,80 @@ jobs:
         run: |
           set -euo pipefail
 
+          echo "Generating MundoTouch art assets..."
+
           python3 scripts/prep_assets.py
 
+          test -d romfs
           test -d romfs/assets
 
-          ASSET_COUNT="$(find romfs/assets -maxdepth 1 -type f | wc -l)"
-          COLOR_COUNT="$(find romfs/assets -maxdepth 1 -type f -name 'line_*.png' | wc -l)"
-          HUNT_COUNT="$(find romfs/assets -maxdepth 1 -type f -name 'hunt_*.jpg' | wc -l)"
+          ASSET_COUNT="$(
+            find romfs/assets \
+              -maxdepth 1 \
+              -type f |
+            wc -l
+          )"
+
+          COLOR_COUNT="$(
+            find romfs/assets \
+              -maxdepth 1 \
+              -type f \
+              -name 'line_*.png' |
+            wc -l
+          )"
+
+          HUNT_COUNT="$(
+            find romfs/assets \
+              -maxdepth 1 \
+              -type f \
+              -name 'hunt_*.jpg' |
+            wc -l
+          )"
 
           echo "Total assets: $ASSET_COUNT"
           echo "Coloring drawings: $COLOR_COUNT"
           echo "Object-hunt scenes: $HUNT_COUNT"
 
-          test "$ASSET_COUNT" -ge 40
-          test "$COLOR_COUNT" -ge 20
-          test "$HUNT_COUNT" -ge 5
+          if [ "$ASSET_COUNT" -lt 40 ]; then
+            echo "ERROR: Expected at least 40 art assets."
+            exit 1
+          fi
+
+          if [ "$COLOR_COUNT" -lt 20 ]; then
+            echo "ERROR: Expected at least 20 coloring drawings."
+            exit 1
+          fi
+
+          if [ "$HUNT_COUNT" -lt 5 ]; then
+            echo "ERROR: Expected at least 5 object-hunt scenes."
+            exit 1
+          fi
 
           echo "Art asset validation passed."
 
-      - name: Generate and prepare Brazilian Portuguese audio
+      - name: Generate Brazilian Portuguese audio and real animal sounds
         shell: bash
         working-directory: MundoTouch3
         run: |
           set -euo pipefail
 
-          echo "Generating neural pt-BR speech and preparing animal recordings..."
+          echo "Generating neural pt-BR speech..."
+          echo "Preparing real animal recordings..."
 
           python3 scripts/gen_audio.py
 
           test -d romfs/audio
 
           AUDIO_COUNT="$(
-            find romfs/audio -type f \
+            find romfs/audio \
+              -type f \
               \( -name '*.wav' -o -name '*.ogg' \) |
             wc -l
           )"
 
           EMPTY_COUNT="$(
-            find romfs/audio -type f \
+            find romfs/audio \
+              -type f \
               \( -name '*.wav' -o -name '*.ogg' \) \
               -size 0 |
             wc -l
@@ -120,47 +176,87 @@ jobs:
           echo "Audio files generated: $AUDIO_COUNT"
           echo "Empty audio files: $EMPTY_COUNT"
 
-          test "$AUDIO_COUNT" -ge 100
-          test "$EMPTY_COUNT" -eq 0
+          if [ "$AUDIO_COUNT" -lt 100 ]; then
+            echo "ERROR: Expected at least 100 audio files."
+            exit 1
+          fi
+
+          if [ "$EMPTY_COUNT" -ne 0 ]; then
+            echo "ERROR: Empty audio files detected."
+            exit 1
+          fi
 
           echo "Audio generation completed."
 
-      - name: Validate audio QA
+      - name: Validate generated audio
         shell: bash
         working-directory: MundoTouch3
         run: |
           set -euo pipefail
 
-          if [ -f audio_qa_report.json ]; then
-            python3 -m json.tool audio_qa_report.json >/dev/null
-            echo "audio_qa_report.json is valid."
-          else
+          echo "Running audio QA..."
+
+          if [ ! -f audio_qa_report.json ]; then
             echo "ERROR: audio_qa_report.json was not generated."
             exit 1
           fi
 
+          python3 -m json.tool \
+            audio_qa_report.json \
+            >/dev/null
+
           BAD_AUDIO=0
 
           while IFS= read -r FILE; do
+
             if ! ffprobe \
               -v error \
               -show_entries format=duration \
               -of default=noprint_wrappers=1:nokey=1 \
-              "$FILE" >/dev/null 2>&1; then
+              "$FILE" \
+              >/dev/null 2>&1; then
 
-              echo "Invalid audio: $FILE"
+              echo "INVALID AUDIO: $FILE"
               BAD_AUDIO=$((BAD_AUDIO + 1))
+
             fi
+
           done < <(
-            find romfs/audio -type f \
+            find romfs/audio \
+              -type f \
               \( -name '*.wav' -o -name '*.ogg' \) |
             sort
           )
 
           echo "Invalid audio files: $BAD_AUDIO"
-          test "$BAD_AUDIO" -eq 0
+
+          if [ "$BAD_AUDIO" -ne 0 ]; then
+            echo "ERROR: One or more generated audio files are invalid."
+            exit 1
+          fi
 
           echo "Audio QA passed."
+
+      - name: Show generated animal audio
+        shell: bash
+        working-directory: MundoTouch3
+        run: |
+          set -euo pipefail
+
+          echo "Animal audio generated:"
+
+          find romfs/audio \
+            -maxdepth 1 \
+            -type f \
+            -name 'snd_*' \
+            -printf '%f\n' \
+            | sort || true
+
+          if [ -f ANIMAL_AUDIO_CREDITS.txt ]; then
+            echo ""
+            echo "Animal audio credits:"
+            cat ANIMAL_AUDIO_CREDITS.txt
+          fi
 
       - name: Validate MundoTouch source
         shell: bash
@@ -168,12 +264,14 @@ jobs:
         run: |
           set -euo pipefail
 
+          echo "Validating MundoTouch source..."
+
           test -s source/main.cpp
           test -s Makefile
 
           grep -q "SDL" source/main.cpp
 
-          echo "main.cpp:"
+          echo "main.cpp size:"
           wc -c source/main.cpp
 
           echo "Source validation passed."
@@ -184,12 +282,16 @@ jobs:
         run: |
           set -euo pipefail
 
+          echo "Starting Nintendo Switch build..."
+
           docker run --rm \
             -v "$PWD:/work" \
             -w /work \
             devkitpro/devkita64:latest \
             bash -lc '
               set -euo pipefail
+
+              echo "Installing Switch SDL2 dependencies..."
 
               dkp-pacman -S \
                 --needed \
@@ -199,14 +301,22 @@ jobs:
                 switch-sdl2_mixer \
                 switch-sdl2_ttf
 
+              echo "Cleaning previous build..."
+
               make clean || true
+
+              echo "Compiling MundoTouch 3.1..."
 
               make -j2
 
+              echo "Checking generated NRO..."
+
               test -s MundoTouch.nro
+
+              echo "Compilation completed."
             '
 
-          echo "Nintendo Switch compilation completed."
+          echo "Nintendo Switch build completed."
 
       - name: Verify compiled NRO
         shell: bash
@@ -215,18 +325,20 @@ jobs:
 
           NRO="MundoTouch3/MundoTouch.nro"
 
+          echo "Validating compiled NRO..."
+
           test -s "$NRO"
 
           SIZE="$(stat -c%s "$NRO")"
 
-          echo "MundoTouch 3.1 NRO size: $SIZE bytes"
+          echo "MundoTouch 3.1 v5 NRO size: $SIZE bytes"
 
           if [ "$SIZE" -le 1000000 ]; then
             echo "ERROR: Generated NRO is unexpectedly small."
             exit 1
           fi
 
-          echo "SHA256:"
+          echo "MundoTouch NRO SHA256:"
           sha256sum "$NRO"
 
           echo "NRO validation passed."
@@ -236,10 +348,14 @@ jobs:
         run: |
           set -euo pipefail
 
+          echo "Preparing MundoTouch 3.1 v5 release..."
+
           mkdir -p releases
+
           rm -rf releases/package
 
-          mkdir -p releases/package/switch/MundoTouch
+          mkdir -p \
+            releases/package/switch/MundoTouch
 
           cp \
             MundoTouch3/MundoTouch.nro \
@@ -249,11 +365,15 @@ jobs:
             MundoTouch3/MundoTouch.nro \
             releases/package/switch/MundoTouch/MundoTouch.nro
 
-          rm -f releases/MundoTouch-switch.zip
+          rm -f \
+            releases/MundoTouch-switch.zip
 
           (
             cd releases/package
-            zip -qr ../MundoTouch-switch.zip switch
+
+            zip -qr \
+              ../MundoTouch-switch.zip \
+              switch
           )
 
           rm -rf releases/package
@@ -262,18 +382,24 @@ jobs:
             releases/MundoTouch.nro \
             > releases/MundoTouch.nro.sha256
 
-          echo "Release package:"
+          echo "Release package generated:"
+
           ls -lh \
             releases/MundoTouch.nro \
             releases/MundoTouch-switch.zip \
             releases/MundoTouch.nro.sha256
 
-      - name: Publish MundoTouch 3.1
+      - name: Publish MundoTouch 3.1 v5
         shell: bash
         run: |
           set -euo pipefail
 
-          git config user.name "github-actions[bot]"
+          echo "Preparing GitHub release files..."
+
+          git config \
+            user.name \
+            "github-actions[bot]"
+
           git config \
             user.email \
             "41898282+github-actions[bot]@users.noreply.github.com"
@@ -284,18 +410,24 @@ jobs:
             releases/MundoTouch.nro.sha256
 
           if git diff --cached --quiet; then
+
             echo "Release files are already current."
+
           else
+
+            echo "Publishing MundoTouch 3.1 Polimento v5..."
+
             git commit \
-              -m "build: publish MundoTouch 3.1 Polimento v4 [skip ci]"
+              -m "build: publish MundoTouch 3.1 Polimento v5 [skip ci]"
 
             git push
+
           fi
 
-      - name: Upload MundoTouch 3.1 artifact
+      - name: Upload MundoTouch 3.1 v5 artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MundoTouch-3.1-Polimento-v4
+          name: MundoTouch-3.1-Polimento-v5
           compression-level: 6
           if-no-files-found: error
           path: |
@@ -303,3 +435,4 @@ jobs:
             releases/MundoTouch-switch.zip
             releases/MundoTouch.nro.sha256
             MundoTouch3/audio_qa_report.json
+            MundoTouch3/ANIMAL_AUDIO_CREDITS.txt
