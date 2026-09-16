@@ -1,4 +1,4 @@
-name: Build MundoTouch 2.0 with audio
+name: Build MundoTouch 3.0 Professional
 
 on:
   workflow_dispatch:
@@ -6,6 +6,7 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/build.yml'
+      - 'MundoTouch3_source_final.zip'
 
 permissions:
   contents: write
@@ -13,219 +14,112 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
-      - name: Recreate MundoTouch 2 source
+      - name: Unpack MundoTouch 3.0 source
         shell: bash
         run: |
           set -euo pipefail
+          test -s MundoTouch3_source_final.zip
+          rm -rf MundoTouch3
+          unzip -q MundoTouch3_source_final.zip -d .
+          test -f MundoTouch3/Makefile
+          test -f MundoTouch3/source/main.cpp
+          test -f MundoTouch3/scripts/gen_audio.py
+          test -f MundoTouch3/scripts/prep_assets.py
 
-          SOURCE_COMMIT="1d3e2637b0c82e72c3cb2ec9abde96c98d302c10"
-
-          echo "Restoring MundoTouch source from commit:"
-          echo "$SOURCE_COMMIT"
-
-          git cat-file -e "${SOURCE_COMMIT}^{commit}"
-
-          git show "${SOURCE_COMMIT}:.github/workflows/build.yml" \
-            > /tmp/mundotouch_source_workflow.yml
-
-          awk '
-            /cat > \/tmp\/mundotouch_v2\.b64/ {
-              capture=1
-              next
-            }
-
-            capture && /^[[:space:]]*PAYLOAD[[:space:]]*$/ {
-              exit
-            }
-
-            capture {
-              sub(/^[[:space:]]+/, "")
-              print
-            }
-          ' /tmp/mundotouch_source_workflow.yml \
-            > /tmp/mundotouch_v2.b64
-
-          echo "Checking embedded source payload..."
-
-          test -s /tmp/mundotouch_v2.b64
-
-          base64 -d /tmp/mundotouch_v2.b64 \
-            > /tmp/mundotouch_v2.tgz
-
-          echo "Checking source archive..."
-
-          tar -tzf /tmp/mundotouch_v2.tgz >/dev/null
-
-          echo "Extracting MundoTouch source..."
-
-          tar -xzf /tmp/mundotouch_v2.tgz \
-            -C "$GITHUB_WORKSPACE"
-
-          echo
-          echo "MundoTouch source restored successfully."
-          echo
-
-          test -f Makefile
-          test -f scripts/gen_audio.py
-
-      - name: Install voice generation tools
+      - name: Install neural audio and art tools
         shell: bash
         run: |
           set -euo pipefail
-
           sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg espeak-ng python3-pil python3-pip zip
+          python3 -m pip install --quiet --break-system-packages edge-tts
 
-          sudo apt-get install -y -qq \
-            espeak \
-            ffmpeg
-
-          echo
-          echo "Voice generation tools installed successfully."
-
-      - name: Generate Brazilian Portuguese voices and animal sounds
+      - name: Prepare professional art assets
         shell: bash
+        working-directory: MundoTouch3
         run: |
           set -euo pipefail
+          python3 scripts/prep_assets.py
+          test -s romfs/assets/story_lion_2.jpg
+          test -s romfs/assets/story_elephant_3.jpg
+          test -s romfs/assets/story_turtle_3.jpg
+          test -s romfs/assets/line_elephant.png
+          test -s romfs/assets/line_giraffe.png
+          test -s romfs/assets/line_turtle.png
 
-          echo "Generating MundoTouch audio library..."
-
+      - name: Generate Brazilian Portuguese narration and sounds
+        shell: bash
+        working-directory: MundoTouch3
+        run: |
+          set -euo pipefail
           python3 scripts/gen_audio.py
-
-          echo
-          echo "Audio generation finished."
-          echo
-
-          AUDIO_COUNT="$(find generated/audio \
-            -maxdepth 1 \
-            -type f \
-            -name '*.pcm' \
-            | wc -l)"
-
-          echo "PCM audio files generated: ${AUDIO_COUNT}"
-
-          du -sh generated/audio
-
-          if [ "${AUDIO_COUNT}" -lt 1 ]; then
-            echo "ERROR: No audio files were generated."
-            exit 1
-          fi
-
-          echo
-          echo "Audio library verified successfully."
+          AUDIO_COUNT="$(find romfs/audio -maxdepth 1 -type f -name '*.wav' | wc -l)"
+          echo "Audio files generated: $AUDIO_COUNT"
+          test "$AUDIO_COUNT" -ge 120
+          test -s romfs/audio/welcome.wav
+          test -s romfs/audio/hunt_intro.wav
+          test -s romfs/audio/story_lion_1.wav
+          test -s romfs/audio/music.wav
 
       - name: Build Nintendo Switch NRO
         shell: bash
+        working-directory: MundoTouch3
         run: |
           set -euo pipefail
-
-          echo "Building MundoTouch for Nintendo Switch..."
-
           docker run --rm \
-            -v "$GITHUB_WORKSPACE:/work" \
+            -v "$PWD:/work" \
             -w /work \
             devkitpro/devkita64:latest \
-            bash -lc 'make clean all'
+            bash -lc 'dkp-pacman -S --needed --noconfirm switch-sdl2 switch-sdl2_image switch-sdl2_mixer switch-sdl2_ttf >/dev/null && make clean all'
 
-          echo
-          echo "Nintendo Switch build command completed."
-
-      - name: Verify build
+      - name: Verify MundoTouch 3.0
         shell: bash
         run: |
           set -euo pipefail
+          test -s MundoTouch3/MundoTouch.nro
+          SIZE="$(stat -c%s MundoTouch3/MundoTouch.nro)"
+          echo "MundoTouch 3.0 NRO size: $SIZE bytes"
+          test "$SIZE" -gt 1000000
+          sha256sum MundoTouch3/MundoTouch.nro
 
-          echo "Checking generated NRO..."
-
-          test -s MundoTouch.nro
-
-          echo
-          echo "MundoTouch.nro generated successfully:"
-          ls -lh MundoTouch.nro
-
-          echo
-          echo "SHA256:"
-          sha256sum MundoTouch.nro
-
-      - name: Prepare direct-download files
+      - name: Prepare DBI direct-download files
         shell: bash
         run: |
           set -euo pipefail
-
-          echo "Preparing MundoTouch download package..."
-
           rm -rf releases/package
-          rm -f releases/MundoTouch-switch.zip
-
           mkdir -p releases/package/switch/MundoTouch
-
-          cp MundoTouch.nro \
-            releases/MundoTouch.nro
-
-          cp MundoTouch.nro \
-            releases/package/switch/MundoTouch/MundoTouch.nro
-
-          (
-            cd releases/package
-            zip -qr ../MundoTouch-switch.zip switch
-          )
-
+          cp MundoTouch3/MundoTouch.nro releases/MundoTouch.nro
+          cp MundoTouch3/MundoTouch.nro releases/package/switch/MundoTouch/MundoTouch.nro
+          rm -f releases/MundoTouch-switch.zip
+          (cd releases/package && zip -qr ../MundoTouch-switch.zip switch)
           rm -rf releases/package
+          sha256sum releases/MundoTouch.nro > releases/MundoTouch.nro.sha256
+          ls -lh releases/MundoTouch.nro releases/MundoTouch-switch.zip releases/MundoTouch.nro.sha256
 
-          sha256sum releases/MundoTouch.nro \
-            > releases/MundoTouch.nro.sha256
-
-          echo
-          echo "Download files prepared:"
-          ls -lh \
-            releases/MundoTouch.nro \
-            releases/MundoTouch-switch.zip \
-            releases/MundoTouch.nro.sha256
-
-      - name: Publish MundoTouch 2.0 to main branch
+      - name: Publish MundoTouch 3.0
         shell: bash
         run: |
           set -euo pipefail
-
           git config user.name "github-actions[bot]"
-
-          git config user.email \
-            "41898282+github-actions[bot]@users.noreply.github.com"
-
-          git add \
-            releases/MundoTouch.nro \
-            releases/MundoTouch-switch.zip \
-            releases/MundoTouch.nro.sha256
-
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add releases/MundoTouch.nro releases/MundoTouch-switch.zip releases/MundoTouch.nro.sha256
           if git diff --cached --quiet; then
-
             echo "No binary changes to publish."
-
           else
-
-            echo "Publishing new MundoTouch build..."
-
-            git commit \
-              -m "build: publish MundoTouch 2.0 audio edition [skip ci]"
-
+            git commit -m "build: publish MundoTouch 3.0 professional edition [skip ci]"
             git push
-
-            echo
-            echo "MundoTouch build published successfully."
-
           fi
 
-      - name: Upload Actions artifact
+      - name: Upload MundoTouch 3.0 artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MundoTouch-2.0-NRO
+          name: MundoTouch-3.0-NRO
           compression-level: 6
           if-no-files-found: error
           path: |
