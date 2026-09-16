@@ -7,7 +7,7 @@ on:
       - main
     paths:
       - '.github/workflows/build.yml'
-      - 'MundoTouch3_3.1_POLIMENTO_source_v3.zip'
+      - 'MundoTouch3_3.1_POLIMENTO_source_v4.zip'
 
 permissions:
   contents: write
@@ -21,31 +21,30 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Unpack MundoTouch 3.1 source v3
+      - name: Unpack MundoTouch 3.1 source v4
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Checking MundoTouch 3.1 v3 source ZIP..."
+          SOURCE_ZIP="MundoTouch3_3.1_POLIMENTO_source_v4.zip"
 
-          test -s MundoTouch3_3.1_POLIMENTO_source_v3.zip
-
-          echo "Removing temporary source directory..."
+          echo "Checking source package: $SOURCE_ZIP"
+          test -s "$SOURCE_ZIP"
 
           rm -rf MundoTouch3
 
-          echo "Extracting MundoTouch 3.1 v3..."
+          echo "Testing ZIP integrity..."
+          unzip -tq "$SOURCE_ZIP"
 
-          unzip -q MundoTouch3_3.1_POLIMENTO_source_v3.zip -d .
-
-          echo "Checking project structure..."
+          echo "Extracting MundoTouch 3.1 v4..."
+          unzip -q "$SOURCE_ZIP" -d .
 
           test -f MundoTouch3/Makefile
           test -f MundoTouch3/source/main.cpp
           test -f MundoTouch3/scripts/gen_audio.py
           test -f MundoTouch3/scripts/prep_assets.py
 
-          echo "MundoTouch 3.1 v3 source package OK."
+          echo "MundoTouch 3.1 v4 source package OK."
 
       - name: Install audio and art tools
         shell: bash
@@ -53,10 +52,8 @@ jobs:
           set -euo pipefail
 
           sudo apt-get update -qq
-
           sudo apt-get install -y -qq \
             ffmpeg \
-            espeak-ng \
             python3-pil \
             python3-pip \
             zip
@@ -66,6 +63,9 @@ jobs:
             --break-system-packages \
             edge-tts
 
+          ffmpeg -version | head -1
+          python3 --version
+
           echo "Required tools installed."
 
       - name: Prepare MundoTouch 3.1 art assets
@@ -74,131 +74,109 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "Generating art assets..."
-
           python3 scripts/prep_assets.py
 
-          echo "Checking generated assets..."
-
-          test -d romfs
           test -d romfs/assets
 
           ASSET_COUNT="$(find romfs/assets -maxdepth 1 -type f | wc -l)"
+          COLOR_COUNT="$(find romfs/assets -maxdepth 1 -type f -name 'line_*.png' | wc -l)"
+          HUNT_COUNT="$(find romfs/assets -maxdepth 1 -type f -name 'hunt_*.jpg' | wc -l)"
 
-          echo "Total generated assets: $ASSET_COUNT"
+          echo "Total assets: $ASSET_COUNT"
+          echo "Coloring drawings: $COLOR_COUNT"
+          echo "Object-hunt scenes: $HUNT_COUNT"
 
-          if [ "$ASSET_COUNT" -lt 20 ]; then
-            echo "ERROR: Expected at least 20 generated assets."
-            exit 1
-          fi
+          test "$ASSET_COUNT" -ge 40
+          test "$COLOR_COUNT" -ge 20
+          test "$HUNT_COUNT" -ge 5
 
-          echo "Generated assets:"
-          find romfs/assets \
-            -maxdepth 1 \
-            -type f \
-            -printf '%f\n' \
-            | sort
+          echo "Art asset validation passed."
 
-          echo "Art asset validation completed successfully."
-
-      - name: Generate Brazilian Portuguese audio
+      - name: Generate and prepare Brazilian Portuguese audio
         shell: bash
         working-directory: MundoTouch3
         run: |
           set -euo pipefail
 
-          echo "Generating Brazilian Portuguese neural audio..."
+          echo "Generating neural pt-BR speech and preparing animal recordings..."
 
           python3 scripts/gen_audio.py
-
-          echo "Checking generated audio..."
 
           test -d romfs/audio
 
           AUDIO_COUNT="$(
-            find romfs/audio \
-              -type f \
-              \( -name '*.wav' -o -name '*.ogg' \) \
-              | wc -l
+            find romfs/audio -type f \
+              \( -name '*.wav' -o -name '*.ogg' \) |
+            wc -l
           )"
 
-          echo "Total audio files: $AUDIO_COUNT"
+          EMPTY_COUNT="$(
+            find romfs/audio -type f \
+              \( -name '*.wav' -o -name '*.ogg' \) \
+              -size 0 |
+            wc -l
+          )"
 
-          if [ "$AUDIO_COUNT" -lt 100 ]; then
-            echo "ERROR: Expected at least 100 audio files."
-            exit 1
-          fi
+          echo "Audio files generated: $AUDIO_COUNT"
+          echo "Empty audio files: $EMPTY_COUNT"
 
-          echo "Audio generation completed successfully."
+          test "$AUDIO_COUNT" -ge 100
+          test "$EMPTY_COUNT" -eq 0
 
-      - name: Validate generated audio
+          echo "Audio generation completed."
+
+      - name: Validate audio QA
         shell: bash
         working-directory: MundoTouch3
         run: |
           set -euo pipefail
-
-          echo "Validating audio files..."
-
-          AUDIO_COUNT="$(
-            find romfs/audio \
-              -type f \
-              \( -name '*.wav' -o -name '*.ogg' \) \
-              | wc -l
-          )"
-
-          EMPTY_AUDIO="$(
-            find romfs/audio \
-              -type f \
-              \( -name '*.wav' -o -name '*.ogg' \) \
-              -size 0 \
-              | wc -l
-          )"
-
-          echo "Audio files: $AUDIO_COUNT"
-          echo "Empty audio files: $EMPTY_AUDIO"
-
-          if [ "$AUDIO_COUNT" -lt 100 ]; then
-            echo "ERROR: Insufficient audio files."
-            exit 1
-          fi
-
-          if [ "$EMPTY_AUDIO" -ne 0 ]; then
-            echo "ERROR: Empty audio files were detected."
-            exit 1
-          fi
 
           if [ -f audio_qa_report.json ]; then
-            echo "Validating audio_qa_report.json..."
-
-            python3 -m json.tool \
-              audio_qa_report.json \
-              >/dev/null
-
-            echo "Audio QA JSON is valid."
+            python3 -m json.tool audio_qa_report.json >/dev/null
+            echo "audio_qa_report.json is valid."
           else
-            echo "WARNING: audio_qa_report.json not found."
-            echo "Audio files themselves passed the required checks."
+            echo "ERROR: audio_qa_report.json was not generated."
+            exit 1
           fi
 
-          echo "Audio validation completed successfully."
+          BAD_AUDIO=0
 
-      - name: Validate MundoTouch 3.1 source
+          while IFS= read -r FILE; do
+            if ! ffprobe \
+              -v error \
+              -show_entries format=duration \
+              -of default=noprint_wrappers=1:nokey=1 \
+              "$FILE" >/dev/null 2>&1; then
+
+              echo "Invalid audio: $FILE"
+              BAD_AUDIO=$((BAD_AUDIO + 1))
+            fi
+          done < <(
+            find romfs/audio -type f \
+              \( -name '*.wav' -o -name '*.ogg' \) |
+            sort
+          )
+
+          echo "Invalid audio files: $BAD_AUDIO"
+          test "$BAD_AUDIO" -eq 0
+
+          echo "Audio QA passed."
+
+      - name: Validate MundoTouch source
         shell: bash
         working-directory: MundoTouch3
         run: |
           set -euo pipefail
-
-          echo "Validating source code..."
 
           test -s source/main.cpp
           test -s Makefile
 
           grep -q "SDL" source/main.cpp
 
-          echo "main.cpp size:"
+          echo "main.cpp:"
           wc -c source/main.cpp
 
-          echo "Source validation completed successfully."
+          echo "Source validation passed."
 
       - name: Build Nintendo Switch NRO
         shell: bash
@@ -206,16 +184,12 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "Starting Nintendo Switch compilation..."
-
           docker run --rm \
             -v "$PWD:/work" \
             -w /work \
             devkitpro/devkita64:latest \
             bash -lc '
               set -euo pipefail
-
-              echo "Installing Nintendo Switch SDL2 libraries..."
 
               dkp-pacman -S \
                 --needed \
@@ -225,53 +199,47 @@ jobs:
                 switch-sdl2_mixer \
                 switch-sdl2_ttf
 
-              echo "Cleaning previous build..."
-
               make clean || true
-
-              echo "Compiling MundoTouch 3.1..."
 
               make -j2
 
-              echo "Nintendo Switch compilation completed."
+              test -s MundoTouch.nro
             '
 
-      - name: Verify MundoTouch 3.1 NRO
+          echo "Nintendo Switch compilation completed."
+
+      - name: Verify compiled NRO
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Checking compiled NRO..."
+          NRO="MundoTouch3/MundoTouch.nro"
 
-          test -s MundoTouch3/MundoTouch.nro
+          test -s "$NRO"
 
-          SIZE="$(stat -c%s MundoTouch3/MundoTouch.nro)"
+          SIZE="$(stat -c%s "$NRO")"
 
           echo "MundoTouch 3.1 NRO size: $SIZE bytes"
 
           if [ "$SIZE" -le 1000000 ]; then
-            echo "ERROR: MundoTouch.nro is unexpectedly small."
+            echo "ERROR: Generated NRO is unexpectedly small."
             exit 1
           fi
 
           echo "SHA256:"
-          sha256sum MundoTouch3/MundoTouch.nro
+          sha256sum "$NRO"
 
-          echo "NRO validation completed successfully."
+          echo "NRO validation passed."
 
-      - name: Prepare DBI direct-download files
+      - name: Prepare release package
         shell: bash
         run: |
           set -euo pipefail
 
-          echo "Preparing release files..."
-
           mkdir -p releases
-
           rm -rf releases/package
 
-          mkdir -p \
-            releases/package/switch/MundoTouch
+          mkdir -p releases/package/switch/MundoTouch
 
           cp \
             MundoTouch3/MundoTouch.nro \
@@ -281,14 +249,11 @@ jobs:
             MundoTouch3/MundoTouch.nro \
             releases/package/switch/MundoTouch/MundoTouch.nro
 
-          rm -f \
-            releases/MundoTouch-switch.zip
+          rm -f releases/MundoTouch-switch.zip
 
           (
             cd releases/package
-            zip -qr \
-              ../MundoTouch-switch.zip \
-              switch
+            zip -qr ../MundoTouch-switch.zip switch
           )
 
           rm -rf releases/package
@@ -297,8 +262,7 @@ jobs:
             releases/MundoTouch.nro \
             > releases/MundoTouch.nro.sha256
 
-          echo "Release files:"
-
+          echo "Release package:"
           ls -lh \
             releases/MundoTouch.nro \
             releases/MundoTouch-switch.zip \
@@ -309,12 +273,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          echo "Preparing release commit..."
-
-          git config \
-            user.name \
-            "github-actions[bot]"
-
+          git config user.name "github-actions[bot]"
           git config \
             user.email \
             "41898282+github-actions[bot]@users.noreply.github.com"
@@ -325,12 +284,10 @@ jobs:
             releases/MundoTouch.nro.sha256
 
           if git diff --cached --quiet; then
-            echo "No binary changes to publish."
+            echo "Release files are already current."
           else
-            echo "Publishing MundoTouch 3.1..."
-
             git commit \
-              -m "build: publish MundoTouch 3.1 Polimento [skip ci]"
+              -m "build: publish MundoTouch 3.1 Polimento v4 [skip ci]"
 
             git push
           fi
@@ -338,7 +295,7 @@ jobs:
       - name: Upload MundoTouch 3.1 artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MundoTouch-3.1-Polimento-NRO
+          name: MundoTouch-3.1-Polimento-v4
           compression-level: 6
           if-no-files-found: error
           path: |
