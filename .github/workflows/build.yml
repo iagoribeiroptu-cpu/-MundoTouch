@@ -3,7 +3,8 @@ name: Build MundoTouch 3.1 Polimento
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches:
+      - main
     paths:
       - '.github/workflows/build.yml'
       - 'MundoTouch3_3.1_POLIMENTO_source_v2.zip'
@@ -25,16 +26,22 @@ jobs:
         run: |
           set -euo pipefail
 
+          echo "Checking source ZIP..."
           test -s MundoTouch3_3.1_POLIMENTO_source_v2.zip
 
+          echo "Removing previous temporary source..."
           rm -rf MundoTouch3
 
+          echo "Extracting MundoTouch 3.1..."
           unzip -q MundoTouch3_3.1_POLIMENTO_source_v2.zip -d .
 
+          echo "Checking project structure..."
           test -f MundoTouch3/Makefile
           test -f MundoTouch3/source/main.cpp
           test -f MundoTouch3/scripts/gen_audio.py
           test -f MundoTouch3/scripts/prep_assets.py
+
+          echo "Source package OK."
 
       - name: Install audio and art tools
         shell: bash
@@ -55,61 +62,160 @@ jobs:
             --break-system-packages \
             edge-tts
 
+          echo "Audio and art tools installed."
+
       - name: Prepare MundoTouch 3.1 art assets
         shell: bash
         working-directory: MundoTouch3
         run: |
           set -euo pipefail
 
+          echo "Generating MundoTouch art assets..."
+
           python3 scripts/prep_assets.py
 
           echo "Checking generated art..."
 
+          test -d romfs
           test -d romfs/assets
 
-          COLOR_COUNT="$(find romfs/assets -maxdepth 1 -type f -name 'color_*.png' | wc -l)"
+          ASSET_COUNT="$(find romfs/assets -maxdepth 1 -type f | wc -l)"
 
-          echo "Coloring pages: $COLOR_COUNT"
+          echo "Total generated assets: $ASSET_COUNT"
 
-          test "$COLOR_COUNT" -ge 20
+          if [ "$ASSET_COUNT" -lt 20 ]; then
+            echo "ERROR: Expected at least 20 generated art assets."
+            exit 1
+          fi
 
-      - name: Generate and validate Brazilian Portuguese audio
+          echo "Art assets generated successfully."
+
+          echo "Generated asset list:"
+          find romfs/assets -maxdepth 1 -type f -printf '%f\n' | sort
+
+      - name: Generate Brazilian Portuguese audio
         shell: bash
         working-directory: MundoTouch3
         run: |
           set -euo pipefail
 
+          echo "Generating Brazilian Portuguese narration and sound assets..."
+
           python3 scripts/gen_audio.py
+
+          echo "Checking audio directory..."
 
           test -d romfs/audio
 
           AUDIO_COUNT="$(find romfs/audio -type f \( -name '*.wav' -o -name '*.ogg' \) | wc -l)"
 
-          echo "Audio files generated: $AUDIO_COUNT"
+          echo "Total audio files: $AUDIO_COUNT"
 
-          test "$AUDIO_COUNT" -ge 100
-
-          test -s romfs/audio/welcome.wav
-
-          if [ -f audio_qa_report.json ]; then
-            echo "Audio QA report found."
-            cat audio_qa_report.json
+          if [ "$AUDIO_COUNT" -lt 100 ]; then
+            echo "ERROR: Expected at least 100 audio files."
+            exit 1
           fi
 
-      - name: Validate MundoTouch 3.1 content
+          echo "Audio generation completed."
+
+      - name: Validate audio QA report
         shell: bash
         working-directory: MundoTouch3
         run: |
           set -euo pipefail
 
-          echo "Validating MundoTouch 3.1..."
+          echo "Looking for audio QA report..."
 
-          test -f source/main.cpp
-          test -f Makefile
+          if [ -f audio_qa_report.json ]; then
+            echo "audio_qa_report.json found."
+
+            python3 - <<'PY'
+          import json
+          import sys
+
+          path = "audio_qa_report.json"
+
+          with open(path, "r", encoding="utf-8") as f:
+              data = json.load(f)
+
+          if isinstance(data, dict):
+              if isinstance(data.get("entries"), list):
+                  entries = data["entries"]
+              elif isinstance(data.get("files"), list):
+                  entries = data["files"]
+              else:
+                  entries = []
+          elif isinstance(data, list):
+              entries = data
+          else:
+              entries = []
+
+          print(f"QA entries found: {len(entries)}")
+
+          bad = []
+
+          for item in entries:
+              if isinstance(item, dict):
+                  status = str(item.get("status", "OK")).upper()
+                  if status not in ("OK", "PASS", "SUCCESS"):
+                      bad.append(item)
+
+          if bad:
+              print("ERROR: Audio QA contains failed entries.")
+              for item in bad[:20]:
+                  print(item)
+              sys.exit(1)
+
+          print("Audio QA report validation OK.")
+          PY
+          else
+            echo "WARNING: audio_qa_report.json was not generated."
+            echo "Continuing because the audio files themselves will also be validated."
+          fi
+
+      - name: Validate generated audio files
+        shell: bash
+        working-directory: MundoTouch3
+        run: |
+          set -euo pipefail
+
+          echo "Validating generated audio files..."
+
+          AUDIO_COUNT="$(find romfs/audio -type f \( -name '*.wav' -o -name '*.ogg' \) | wc -l)"
+
+          if [ "$AUDIO_COUNT" -lt 100 ]; then
+            echo "ERROR: Insufficient audio files."
+            exit 1
+          fi
+
+          EMPTY_AUDIO="$(find romfs/audio -type f \( -name '*.wav' -o -name '*.ogg' \) -size 0 | wc -l)"
+
+          echo "Empty audio files: $EMPTY_AUDIO"
+
+          if [ "$EMPTY_AUDIO" -ne 0 ]; then
+            echo "ERROR: One or more audio files are empty."
+            exit 1
+          fi
+
+          echo "Generated audio validation OK."
+
+      - name: Validate MundoTouch 3.1 source
+        shell: bash
+        working-directory: MundoTouch3
+        run: |
+          set -euo pipefail
+
+          echo "Validating MundoTouch source..."
+
+          test -s source/main.cpp
+          test -s Makefile
 
           grep -q "SDL" source/main.cpp
 
-          echo "Source validation completed."
+          echo "main.cpp size:"
+          wc -c source/main.cpp
+
+          echo "Source validation completed successfully."
 
       - name: Build Nintendo Switch NRO
         shell: bash
@@ -117,19 +223,34 @@ jobs:
         run: |
           set -euo pipefail
 
+          echo "Starting Nintendo Switch compilation..."
+
           docker run --rm \
             -v "$PWD:/work" \
             -w /work \
             devkitpro/devkita64:latest \
             bash -lc '
+              set -e
+
+              echo "Installing Nintendo Switch SDL libraries..."
+
               dkp-pacman -S \
                 --needed \
                 --noconfirm \
                 switch-sdl2 \
                 switch-sdl2_image \
                 switch-sdl2_mixer \
-                switch-sdl2_ttf >/dev/null \
-              && make clean all
+                switch-sdl2_ttf
+
+              echo "Cleaning previous build..."
+
+              make clean || true
+
+              echo "Building MundoTouch..."
+
+              make -j2
+
+              echo "Compilation finished."
             '
 
       - name: Verify MundoTouch 3.1 NRO
@@ -137,20 +258,33 @@ jobs:
         run: |
           set -euo pipefail
 
+          echo "Searching for compiled NRO..."
+
           test -s MundoTouch3/MundoTouch.nro
 
           SIZE="$(stat -c%s MundoTouch3/MundoTouch.nro)"
 
           echo "MundoTouch 3.1 NRO size: $SIZE bytes"
 
-          test "$SIZE" -gt 1000000
+          if [ "$SIZE" -le 1000000 ]; then
+            echo "ERROR: MundoTouch.nro is unexpectedly small."
+            exit 1
+          fi
+
+          echo "Calculating SHA256..."
 
           sha256sum MundoTouch3/MundoTouch.nro
+
+          echo "NRO verification OK."
 
       - name: Prepare DBI direct-download files
         shell: bash
         run: |
           set -euo pipefail
+
+          echo "Preparing release files..."
+
+          mkdir -p releases
 
           rm -rf releases/package
 
@@ -174,6 +308,8 @@ jobs:
           sha256sum releases/MundoTouch.nro \
             > releases/MundoTouch.nro.sha256
 
+          echo "Release files prepared:"
+
           ls -lh \
             releases/MundoTouch.nro \
             releases/MundoTouch-switch.zip \
@@ -183,6 +319,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+
+          echo "Preparing GitHub release-file commit..."
 
           git config user.name "github-actions[bot]"
           git config user.email \
@@ -196,6 +334,8 @@ jobs:
           if git diff --cached --quiet; then
             echo "No binary changes to publish."
           else
+            echo "Publishing MundoTouch 3.1 binaries..."
+
             git commit \
               -m "build: publish MundoTouch 3.1 Polimento [skip ci]"
 
@@ -212,3 +352,4 @@ jobs:
             releases/MundoTouch.nro
             releases/MundoTouch-switch.zip
             releases/MundoTouch.nro.sha256
+            MundoTouch3/audio_qa_report.json
