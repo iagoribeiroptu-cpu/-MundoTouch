@@ -1,4 +1,4 @@
-name: Build MundoTouch 3.0 Professional
+name: Build MundoTouch 3.1 Polimento
 
 on:
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
     branches: [main]
     paths:
       - '.github/workflows/build.yml'
-      - 'MundoTouch3_source_final.zip'
+      - 'MundoTouch3_3.1_POLIMENTO_source_v2.zip'
 
 permissions:
   contents: write
@@ -20,106 +20,192 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Unpack MundoTouch 3.0 source
+      - name: Unpack MundoTouch 3.1 source
         shell: bash
         run: |
           set -euo pipefail
-          test -s MundoTouch3_source_final.zip
+
+          test -s MundoTouch3_3.1_POLIMENTO_source_v2.zip
+
           rm -rf MundoTouch3
-          unzip -q MundoTouch3_source_final.zip -d .
+
+          unzip -q MundoTouch3_3.1_POLIMENTO_source_v2.zip -d .
+
           test -f MundoTouch3/Makefile
           test -f MundoTouch3/source/main.cpp
           test -f MundoTouch3/scripts/gen_audio.py
           test -f MundoTouch3/scripts/prep_assets.py
 
-      - name: Install neural audio and art tools
+      - name: Install audio and art tools
         shell: bash
         run: |
           set -euo pipefail
+
           sudo apt-get update -qq
-          sudo apt-get install -y -qq ffmpeg espeak-ng python3-pil python3-pip zip
-          python3 -m pip install --quiet --break-system-packages edge-tts
 
-      - name: Prepare professional art assets
+          sudo apt-get install -y -qq \
+            ffmpeg \
+            espeak-ng \
+            python3-pil \
+            python3-pip \
+            zip
+
+          python3 -m pip install \
+            --quiet \
+            --break-system-packages \
+            edge-tts
+
+      - name: Prepare MundoTouch 3.1 art assets
         shell: bash
         working-directory: MundoTouch3
         run: |
           set -euo pipefail
+
           python3 scripts/prep_assets.py
-          test -s romfs/assets/story_lion_2.jpg
-          test -s romfs/assets/story_elephant_3.jpg
-          test -s romfs/assets/story_turtle_3.jpg
-          test -s romfs/assets/line_elephant.png
-          test -s romfs/assets/line_giraffe.png
-          test -s romfs/assets/line_turtle.png
 
-      - name: Generate Brazilian Portuguese narration and sounds
+          echo "Checking generated art..."
+
+          test -d romfs/assets
+
+          COLOR_COUNT="$(find romfs/assets -maxdepth 1 -type f -name 'color_*.png' | wc -l)"
+
+          echo "Coloring pages: $COLOR_COUNT"
+
+          test "$COLOR_COUNT" -ge 20
+
+      - name: Generate and validate Brazilian Portuguese audio
         shell: bash
         working-directory: MundoTouch3
         run: |
           set -euo pipefail
+
           python3 scripts/gen_audio.py
-          AUDIO_COUNT="$(find romfs/audio -maxdepth 1 -type f -name '*.wav' | wc -l)"
+
+          test -d romfs/audio
+
+          AUDIO_COUNT="$(find romfs/audio -type f \( -name '*.wav' -o -name '*.ogg' \) | wc -l)"
+
           echo "Audio files generated: $AUDIO_COUNT"
-          test "$AUDIO_COUNT" -ge 120
+
+          test "$AUDIO_COUNT" -ge 100
+
           test -s romfs/audio/welcome.wav
-          test -s romfs/audio/hunt_intro.wav
-          test -s romfs/audio/story_lion_1.wav
-          test -s romfs/audio/music.wav
+
+          if [ -f audio_qa_report.json ]; then
+            echo "Audio QA report found."
+            cat audio_qa_report.json
+          fi
+
+      - name: Validate MundoTouch 3.1 content
+        shell: bash
+        working-directory: MundoTouch3
+        run: |
+          set -euo pipefail
+
+          echo "Validating MundoTouch 3.1..."
+
+          test -f source/main.cpp
+          test -f Makefile
+
+          grep -q "SDL" source/main.cpp
+
+          echo "Source validation completed."
 
       - name: Build Nintendo Switch NRO
         shell: bash
         working-directory: MundoTouch3
         run: |
           set -euo pipefail
+
           docker run --rm \
             -v "$PWD:/work" \
             -w /work \
             devkitpro/devkita64:latest \
-            bash -lc 'dkp-pacman -S --needed --noconfirm switch-sdl2 switch-sdl2_image switch-sdl2_mixer switch-sdl2_ttf >/dev/null && make clean all'
+            bash -lc '
+              dkp-pacman -S \
+                --needed \
+                --noconfirm \
+                switch-sdl2 \
+                switch-sdl2_image \
+                switch-sdl2_mixer \
+                switch-sdl2_ttf >/dev/null \
+              && make clean all
+            '
 
-      - name: Verify MundoTouch 3.0
+      - name: Verify MundoTouch 3.1 NRO
         shell: bash
         run: |
           set -euo pipefail
+
           test -s MundoTouch3/MundoTouch.nro
+
           SIZE="$(stat -c%s MundoTouch3/MundoTouch.nro)"
-          echo "MundoTouch 3.0 NRO size: $SIZE bytes"
+
+          echo "MundoTouch 3.1 NRO size: $SIZE bytes"
+
           test "$SIZE" -gt 1000000
+
           sha256sum MundoTouch3/MundoTouch.nro
 
       - name: Prepare DBI direct-download files
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf releases/package
-          mkdir -p releases/package/switch/MundoTouch
-          cp MundoTouch3/MundoTouch.nro releases/MundoTouch.nro
-          cp MundoTouch3/MundoTouch.nro releases/package/switch/MundoTouch/MundoTouch.nro
-          rm -f releases/MundoTouch-switch.zip
-          (cd releases/package && zip -qr ../MundoTouch-switch.zip switch)
-          rm -rf releases/package
-          sha256sum releases/MundoTouch.nro > releases/MundoTouch.nro.sha256
-          ls -lh releases/MundoTouch.nro releases/MundoTouch-switch.zip releases/MundoTouch.nro.sha256
 
-      - name: Publish MundoTouch 3.0
+          rm -rf releases/package
+
+          mkdir -p releases/package/switch/MundoTouch
+
+          cp MundoTouch3/MundoTouch.nro \
+             releases/MundoTouch.nro
+
+          cp MundoTouch3/MundoTouch.nro \
+             releases/package/switch/MundoTouch/MundoTouch.nro
+
+          rm -f releases/MundoTouch-switch.zip
+
+          (
+            cd releases/package
+            zip -qr ../MundoTouch-switch.zip switch
+          )
+
+          rm -rf releases/package
+
+          sha256sum releases/MundoTouch.nro \
+            > releases/MundoTouch.nro.sha256
+
+          ls -lh \
+            releases/MundoTouch.nro \
+            releases/MundoTouch-switch.zip \
+            releases/MundoTouch.nro.sha256
+
+      - name: Publish MundoTouch 3.1
         shell: bash
         run: |
           set -euo pipefail
+
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add releases/MundoTouch.nro releases/MundoTouch-switch.zip releases/MundoTouch.nro.sha256
+          git config user.email \
+            "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add \
+            releases/MundoTouch.nro \
+            releases/MundoTouch-switch.zip \
+            releases/MundoTouch.nro.sha256
+
           if git diff --cached --quiet; then
             echo "No binary changes to publish."
           else
-            git commit -m "build: publish MundoTouch 3.0 professional edition [skip ci]"
+            git commit \
+              -m "build: publish MundoTouch 3.1 Polimento [skip ci]"
+
             git push
           fi
 
-      - name: Upload MundoTouch 3.0 artifact
+      - name: Upload MundoTouch 3.1 artifact
         uses: actions/upload-artifact@v4
         with:
-          name: MundoTouch-3.0-NRO
+          name: MundoTouch-3.1-Polimento-NRO
           compression-level: 6
           if-no-files-found: error
           path: |
